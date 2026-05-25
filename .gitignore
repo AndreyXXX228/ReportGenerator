@@ -4,4 +4,3 @@ generated_reports/
 .env
 .idea/
 venv/
-*.docx
