@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  report-generator:
+    build: .
+    container_name: report-generator
+    ports:
+      - "${PORT:-8000}:8000"
+    env_file:
+      - .env
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8000
+      RELOAD: "false"
+      BACKEND_URL: ${BACKEND_URL:-http://host.docker.internal:8080}
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./app:/app/app
+      - ./run.py:/app/run.py
+      - reports_data:/app/generated_reports
+    restart: unless-stopped
+
+volumes:
+  reports_data:
