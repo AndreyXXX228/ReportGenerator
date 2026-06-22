@@ -23,42 +23,84 @@ class DefectStep(BaseModel):
 
 
 class TestRunData(BaseModel):
-    """Данные для сводного отчёта (Шаблон 1)"""
-    # Основная информация
+    # Основная информация (приходит с бэка)
     project_name: str
+    project_description: str = ""
     version: str
     run_name: str
     run_version: str
+    run_description: str = ""
+    start_datetime: datetime = Field(default_factory=datetime.now)
+    end_datetime: datetime = Field(default_factory=datetime.now)
 
-    # Метрики
-    total_tests: int
-    successful_tests: int
-    failed_tests: int
-    skipped_tests: int
-    error_percentage: float
-    skipped_percentage: float
-
-    # Дефекты и ошибки
-    has_blocking_defect: bool = False
-    blocking_defect: Optional[DefectStep] = None
-
-    failed_test_cases: List[DefectStep] = []  # тест-кейсы с ошибками
-    skipped_test_cases: List[DefectStep] = []  # пропущенные тест-кейсы
-
-    critical_errors: List[DefectStep] = []  # критические ошибки (с галочкой)
-    non_critical_errors: List[DefectStep] = []  # некритические ошибки
-
-    # Данные для таблицы в приложении
+    # Единственный источник метрик — таблица тест-кейсов
     test_cases_table: List[TestCaseDetail] = []
 
-    # Подписи
-    responsible_person: str
-    initiator_name: str
+    # Дефекты
+    blocking_defect: Optional[DefectStep] = None
+    failed_test_cases: List[DefectStep] = []
+    skipped_test_cases: List[DefectStep] = []
+    critical_errors: List[DefectStep] = []
+    non_critical_errors: List[DefectStep] = []
 
-    # Дата и время прогона
-    run_datetime: datetime = Field(default_factory=datetime.now)
+    # Подписи
+    responsible_person: str = ""
+    initiator_name: str = ""
+
+    # Дополнительные метрики для шаблона 3
+    integration_software: List[str] = []
+    refactored_tests_count: int = 0
+    new_tests_count: int = 0
+    regression_tests_count: int = 0
+
+    # ========== ВЫЧИСЛЯЕМЫЕ СВОЙСТВА ==========
+
+    @property
+    def total_tests(self) -> int:
+        return len(self.test_cases_table)
+
+    @property
+    def successful_tests(self) -> int:
+        return sum(1 for tc in self.test_cases_table if tc.status == TestStatus.SUCCESS)
+
+    @property
+    def failed_tests(self) -> int:
+        return sum(1 for tc in self.test_cases_table if tc.status == TestStatus.ERROR)
+
+    @property
+    def skipped_tests(self) -> int:
+        return sum(1 for tc in self.test_cases_table if tc.status == TestStatus.SKIPPED)
+
+    @property
+    def error_percentage(self) -> float:
+        if self.total_tests == 0:
+            return 0.0
+        return (self.failed_tests / self.total_tests) * 100
+
+    @property
+    def skipped_percentage(self) -> float:
+        if self.total_tests == 0:
+            return 0.0
+        return (self.skipped_tests / self.total_tests) * 100
+
+    @property
+    def has_blocking_defect(self) -> bool:
+        return self.blocking_defect is not None
+
+    @property
+    def run_datetime(self) -> datetime:
+        return self.start_datetime
+
+    @property
+    def overall_status(self) -> str:
+        if self.has_blocking_defect:
+            return "блокирующий дефект"
+        elif self.failed_tests > 0:
+            return "с ошибкой"
+        else:
+            return "Успешно"
 
 class ReportRequest(BaseModel):
-    """Запрос от фронтенда на генерацию отчёта"""
     run_id: str
     template_type: str  # "summary", "short", "full"
+    jwt_token: str

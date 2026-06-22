@@ -5,9 +5,17 @@ from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Pt, RGBColor
 from app.models import TestRunData
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 
 REPORTS_DIR = "generated_reports"
+_bookmark_id_counter = 0
 
+
+def _next_bookmark_id() -> int:
+    global _bookmark_id_counter
+    _bookmark_id_counter += 1
+    return _bookmark_id_counter
 
 def apply_times_new_roman(paragraph):
     for run in paragraph.runs:
@@ -89,6 +97,68 @@ def _add_author_of_tests_section(doc, data):
     doc.add_paragraph(datetime.now().strftime('%d.%m.%Y'))
     return doc
 
+def _enable_update_fields_on_open(doc):
+    """Word обновит оглавление и другие поля при открытии документа."""
+    settings = doc.settings.element
+    for child in settings:
+        if child.tag == qn('w:updateFields'):
+            child.set(qn('w:val'), 'true')
+            return
+
+    update_fields = OxmlElement('w:updateFields')
+    update_fields.set(qn('w:val'), 'true')
+    settings.append(update_fields)
+
+
+def _add_heading_bookmark(paragraph, bookmark_name: str):
+    """Добавляет закладку к заголовку для гиперссылок в оглавлении."""
+    bookmark_id = str(_next_bookmark_id())
+    start = OxmlElement('w:bookmarkStart')
+    start.set(qn('w:id'), bookmark_id)
+    start.set(qn('w:name'), bookmark_name)
+    paragraph._p.insert(0, start)
+
+    end = OxmlElement('w:bookmarkEnd')
+    end.set(qn('w:id'), bookmark_id)
+    paragraph._p.append(end)
+
+
+def _add_section_heading(doc, text: str, level: int, bookmark_name: str):
+    heading = doc.add_heading(text, level=level)
+    _add_heading_bookmark(heading, bookmark_name)
+    return heading
+
+
+def _add_toc(doc):
+    """Добавляет поле автооглавления Word (обновляется при открытии файла)."""
+    paragraph = doc.add_paragraph()
+    paragraph.paragraph_format.space_after = Pt(12)
+
+    run = paragraph.add_run()
+    fld_char_begin = OxmlElement('w:fldChar')
+    fld_char_begin.set(qn('w:fldCharType'), 'begin')
+    fld_char_begin.set(qn('w:dirty'), 'true')
+    run._r.append(fld_char_begin)
+
+    instr_text = OxmlElement('w:instrText')
+    instr_text.set(qn('xml:space'), 'preserve')
+    instr_text.text = ' TOC \\o "1-3" \\h \\z \\u '
+    run._r.append(instr_text)
+
+    fld_char_separate = OxmlElement('w:fldChar')
+    fld_char_separate.set(qn('w:fldCharType'), 'separate')
+    run._r.append(fld_char_separate)
+
+    placeholder_run = paragraph.add_run('Обновление оглавления...')
+    apply_times_new_roman(paragraph)
+
+    run = paragraph.add_run()
+    fld_char_end = OxmlElement('w:fldChar')
+    fld_char_end.set(qn('w:fldCharType'), 'end')
+    run._r.append(fld_char_end)
+
+    return paragraph
+
 def generate_summary_report(data: TestRunData) -> str:
     os.makedirs(REPORTS_DIR, exist_ok=True)
 
@@ -156,13 +226,7 @@ def generate_summary_report(data: TestRunData) -> str:
     doc.add_paragraph(f'Прогон: {data.run_name}')
     doc.add_paragraph(f'Дата и время: {data.run_datetime.strftime("%H:%M:%S %d.%m.%Y")}')
 
-    if data.has_blocking_defect:
-        status = "блокирующий дефект"
-    elif data.failed_tests > 0:
-        status = "с ошибкой"
-    else:
-        status = "Успешно"
-    doc.add_paragraph(f'Статус: {status}')
+    doc.add_paragraph(f'Статус: {data.overall_status}')
     doc.add_paragraph(
         f'Инициатор запуска прогона: {data.initiator_name if data.initiator_name else "____________________"}')
 
@@ -245,12 +309,15 @@ def generate_short_report(data: TestRunData) -> str:
 
     return filepath
 
-
 def generate_full_report(data: TestRunData) -> str:
+    global _bookmark_id_counter
+    _bookmark_id_counter = 0
+
     os.makedirs(REPORTS_DIR, exist_ok=True)
 
     doc = Document()
     apply_times_new_roman_to_doc(doc)
+    _enable_update_fields_on_open(doc)
 
     for _ in range(10):
         doc.add_paragraph()
@@ -286,26 +353,21 @@ def generate_full_report(data: TestRunData) -> str:
 
     doc.add_page_break()
 
-    doc.add_heading('СОДЕРЖАНИЕ', level=1)
+    toc_title = doc.add_paragraph()
+    toc_title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    toc_title_run = toc_title.add_run('СОДЕРЖАНИЕ')
+    toc_title_run.bold = True
+    toc_title_run.font.size = Pt(14)
+    apply_times_new_roman(toc_title)
 
-    doc.add_paragraph('1 ВВЕДЕНИЕ')
-    doc.add_paragraph('2 ПРЕДМЕТ ТЕСТИРОВАНИЯ')
-    doc.add_paragraph('3 ОБЛАСТЬ ОХВАТЫВАЕМЫХ ВОПРОСОВ')
-    doc.add_paragraph('4 ОГРАНИЧЕНИЯ ТЕСТИРОВАНИЯ')
-    doc.add_paragraph('5 ТЕСТИРОВАНИЕ НОВОЙ ФУНКЦИОНАЛЬНОСТИ')
-    doc.add_paragraph('5.1.1 Тестирование изменений')
-    doc.add_paragraph('5.1.2 Тестирование нового функционала')
-    doc.add_paragraph('6 ИНТЕГРАЦИОННОЕ ТЕСТИРОВАНИЕ')
-    doc.add_paragraph('7 АВТОМАТИЗИРОВАННОЕ РЕГРЕССИОННОЕ ТЕСТИРОВАНИЕ')
-    doc.add_paragraph('8 ИТОГИ ТЕСТИРОВАНИЯ')
-    doc.add_paragraph('9 ВЫВОДЫ И РЕКОМЕНДАЦИИ')
+    _add_toc(doc)
 
     doc.add_page_break()
 
-    doc.add_heading('1 ВВЕДЕНИЕ', level=1)
+    _add_section_heading(doc, '1 ВВЕДЕНИЕ', level=1, bookmark_name='section_1')
     doc.add_paragraph('Период проведения тестирования:')
     doc.add_paragraph(
-        f'{data.run_datetime.strftime("%d.%m.%Y %H:%M")} - {data.run_datetime.strftime("%d.%m.%Y %H:%M")}.')
+        f'{data.start_datetime.strftime("%d.%m.%Y %H:%M")} - {data.end_datetime.strftime("%d.%m.%Y %H:%M")}.')
     doc.add_paragraph()
     doc.add_paragraph('Место проведения тестирования:')
     doc.add_paragraph(
@@ -316,31 +378,32 @@ def generate_full_report(data: TestRunData) -> str:
 
     doc.add_page_break()
 
-    doc.add_heading('2 ПРЕДМЕТ ТЕСТИРОВАНИЯ', level=1)
+    _add_section_heading(doc, '2 ПРЕДМЕТ ТЕСТИРОВАНИЯ', level=1, bookmark_name='section_2')
     doc.add_paragraph(f'Предметом тестирования является {data.project_name} версия {data.version}.')
     doc.add_paragraph(data.project_name)
 
     doc.add_page_break()
 
-    doc.add_heading('3 ОБЛАСТЬ ОХВАТЫВАЕМЫХ ВОПРОСОВ', level=1)
+    _add_section_heading(doc, '3 ОБЛАСТЬ ОХВАТЫВАЕМЫХ ВОПРОСОВ', level=1, bookmark_name='section_3')
     doc.add_paragraph('1. Тестирование новой функциональности:')
-    doc.add_paragraph(f'    1.  Общее количество изменений, {len(data.failed_test_cases)}')
-    doc.add_paragraph(f'    2.  Количество нового функционала, {len(data.test_cases_table)}.')
+    doc.add_paragraph(f'    1.  Общее количество изменений, {data.refactored_tests_count}')
+    doc.add_paragraph(f'    2.  Количество нового функционала, {data.new_tests_count}.')
     doc.add_paragraph('Подробная информация о проверках приведена в разделе «Тестирование новой функциональности».')
     doc.add_paragraph()
     doc.add_paragraph('2. Интеграционное тестирование:')
+    integration_list = ', '.join(data.integration_software) if data.integration_software else 'не указано'
     doc.add_paragraph(
-        f'Перечень программного обеспечения, с которым проводилось интеграционное тестирование {data.project_name}.')
+        f'Перечень программного обеспечения, с которым проводилось интеграционное тестирование {data.project_name}: {integration_list}.')
     doc.add_paragraph('Подробная информация о проверках приведена в разделе «Интеграционное тестирование».')
     doc.add_paragraph()
     doc.add_paragraph('3. Автоматизированное регрессионное тестирование:')
-    doc.add_paragraph(f'Автоматизированное регрессионное тестирование проводилось в объеме {data.total_tests}.')
+    doc.add_paragraph(f'Автоматизированное регрессионное тестирование проводилось в объеме {data.regression_tests_count}.')
     doc.add_paragraph(
         'Подробная информация о проверках приведена в разделе «Автоматизированное регрессионное тестирование».')
 
     doc.add_page_break()
 
-    doc.add_heading('4 ОГРАНИЧЕНИЯ ТЕСТИРОВАНИЯ', level=1)
+    _add_section_heading(doc, '4 ОГРАНИЧЕНИЯ ТЕСТИРОВАНИЯ', level=1, bookmark_name='section_4')
     doc.add_paragraph(f'Тестирование {data.project_name} проводилось с рядом ограничений:')
     doc.add_paragraph(
         f'- проводилось ограниченное тестирование функционала в объеме, указанном в прогоне {data.run_name} версии {data.run_version}, другой функционал не тестировался;')
@@ -348,9 +411,9 @@ def generate_full_report(data: TestRunData) -> str:
 
     doc.add_page_break()
 
-    doc.add_heading('5 ТЕСТИРОВАНИЕ НОВОЙ ФУНКЦИОНАЛЬНОСТИ', level=1)
+    _add_section_heading(doc, '5 ТЕСТИРОВАНИЕ НОВОЙ ФУНКЦИОНАЛЬНОСТИ', level=1, bookmark_name='section_5')
 
-    doc.add_heading('Тестирование изменений', level=2)
+    _add_section_heading(doc, 'Тестирование изменений', level=2, bookmark_name='section_5_1')
     doc.add_paragraph('Результаты тестирования изменений:')
 
     table = doc.add_table(rows=len(data.test_cases_table) + 2, cols=4)
@@ -372,10 +435,10 @@ def generate_full_report(data: TestRunData) -> str:
         table.cell(row, 2).text = data.run_datetime.strftime("%H:%M:%S")
         table.cell(row, 3).text = tc.status.value
 
-    doc.add_paragraph(f'Всего выполнено проверок: {len(data.test_cases_table)}')
+    doc.add_paragraph(f'Всего выполнено проверок: {data.refactored_tests_count}')
     doc.add_paragraph(f'Выполнено с ошибками: {data.failed_tests}')
 
-    doc.add_heading('Тестирование нового функционала', level=2)
+    _add_section_heading(doc, 'Тестирование нового функционала', level=2, bookmark_name='section_5_2')
     doc.add_paragraph('Результаты тестирования нового функционала:')
 
     table2 = doc.add_table(rows=len(data.test_cases_table) + 2, cols=4)
@@ -394,12 +457,12 @@ def generate_full_report(data: TestRunData) -> str:
         table2.cell(row, 2).text = data.run_datetime.strftime("%H:%M:%S")
         table2.cell(row, 3).text = tc.status.value
 
-    doc.add_paragraph(f'Выполнено проверок: {len(data.test_cases_table)}.')
+    doc.add_paragraph(f'Выполнено проверок: {data.new_tests_count}.')
     doc.add_paragraph(f'Выполнено с ошибками: {data.failed_tests}')
 
     doc.add_page_break()
 
-    doc.add_heading('6 ИНТЕГРАЦИОННОЕ ТЕСТИРОВАНИЕ', level=1)
+    _add_section_heading(doc, '6 ИНТЕГРАЦИОННОЕ ТЕСТИРОВАНИЕ', level=1, bookmark_name='section_6')
     doc.add_paragraph('Результаты интеграционного тестирования:')
 
     table3 = doc.add_table(rows=len(data.test_cases_table) + 2, cols=4)
@@ -418,12 +481,12 @@ def generate_full_report(data: TestRunData) -> str:
         table3.cell(row, 2).text = data.run_datetime.strftime("%H:%M:%S")
         table3.cell(row, 3).text = tc.status.value
 
-    doc.add_paragraph(f'Выполнено проверок: {len(data.test_cases_table)}.')
+    doc.add_paragraph(f'Выполнено проверок: {len(data.integration_software)}.')
     doc.add_paragraph(f'Выполнено с ошибками: {data.failed_tests}')
 
     doc.add_page_break()
 
-    doc.add_heading('7 АВТОМАТИЗИРОВАННОЕ РЕГРЕССИОННОЕ ТЕСТИРОВАНИЕ', level=1)
+    _add_section_heading(doc, '7 АВТОМАТИЗИРОВАННОЕ РЕГРЕССИОННОЕ ТЕСТИРОВАНИЕ', level=1, bookmark_name='section_7')
     doc.add_paragraph('Результаты автоматизированного регрессионного тестирования:')
 
     table4 = doc.add_table(rows=len(data.test_cases_table) + 2, cols=4)
@@ -441,12 +504,12 @@ def generate_full_report(data: TestRunData) -> str:
         table4.cell(row, 2).text = data.run_datetime.strftime("%H:%M:%S")
         table4.cell(row, 3).text = tc.status.value
 
-    doc.add_paragraph(f'Выполнено проверок: {data.total_tests}.')
+    doc.add_paragraph(f'Выполнено проверок: {data.regression_tests_count}.')
     doc.add_paragraph(f'Выполнено с ошибками: {data.failed_tests}')
 
     doc.add_page_break()
 
-    doc.add_heading('8 ИТОГИ ТЕСТИРОВАНИЯ', level=1)
+    _add_section_heading(doc, '8 ИТОГИ ТЕСТИРОВАНИЯ', level=1, bookmark_name='section_8')
 
     if data.failed_tests == 0 and not data.has_blocking_defect:
         doc.add_paragraph()
@@ -490,7 +553,7 @@ def generate_full_report(data: TestRunData) -> str:
 
     doc.add_page_break()
 
-    doc.add_heading('9 ВЫВОДЫ И РЕКОМЕНДАЦИИ', level=1)
+    _add_section_heading(doc, '9 ВЫВОДЫ И РЕКОМЕНДАЦИИ', level=1, bookmark_name='section_9')
 
     if data.failed_tests == 0 and not data.has_blocking_defect:
         doc.add_paragraph()
@@ -553,3 +616,7 @@ def generate_full_report(data: TestRunData) -> str:
     doc.save(filepath)
 
     return filepath
+
+def generate_pdf_report(data: TestRunData) -> str:
+    """PDF генерация отключена"""
+    raise NotImplementedError("PDF generation is not available")
