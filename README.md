@@ -1,6 +1,6 @@
-# Test Report Generator
+# Report Generator
 
-Микросервис для генерации отчётов по тестированию (3 шаблона).
+Микросервис для генерации отчётов по тестированию.
 
 ## Запуск
 
@@ -8,14 +8,18 @@ pip install -r requirements.txt
 
 python run.py
 
+## Развёртывание
+docker-compose up --build
+
 ## API
 
 POST /generate
 Content-Type: application/json
 
 {
-"run_id": "run-001",
-"template_type": "summary" # summary / short / full
+  "run_id": "ID_прогона",
+  "template_type": "summary|short|full",
+  "jwt_token": "токен_пользователя"
 }
 
 ## Переменные окружения
