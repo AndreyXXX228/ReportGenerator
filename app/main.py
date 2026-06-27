@@ -1,58 +1,84 @@
-import os
-
-from dotenv import load_dotenv
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+import os
+import py_eureka_client.eureka_client as eureka_client
 
-from app.backend_client import BackendClient
-from app.generators import (
-    generate_full_report,
-    generate_pdf_report,
-    generate_short_report,
-    generate_summary_report,
-)
 from app.models import ReportRequest
+from app.generators import generate_summary_report, generate_short_report, generate_full_report
+from app.backend_client import BackendClient
 
-load_dotenv()
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    print("Приложение запускается...")
+    eureka_server = os.getenv("EUREKA_SERVER_URL", "http://eureka:8761/eureka")
+    service_name = os.getenv("SERVICE_NAME", "report-generator")
+    service_port = int(os.getenv("PORT", 8000))
 
-app = FastAPI(title="Test Report Generator")
 
-_cors_origins = os.getenv("CORS_ORIGINS", "*")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"] if _cors_origins.strip() == "*" else [o.strip() for o in _cors_origins.split(",") if o.strip()],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    use_eureka = os.getenv("USE_EUREKA", "true").lower() == "true"
+    if use_eureka:
+        try:
+            await eureka_client.init_async(
+                eureka_server=eureka_server,
+                app_name=service_name,
+                instance_port=service_port,
+                instance_host="report-generator"
+            )
+            print(f"Успешно зарегистрировался в Eureka: {eureka_server}")
+        except Exception as e:
+            print(f"Ошибка регистрации в Eureka: {e}")
+    else:
+        print("Регистрация в Eureka отключена (USE_EUREKA=false)")
+
+    yield
+
+    print("Приложение останавливается...")
+    if use_eureka:
+        try:
+            await eureka_client.stop_async()
+            print("Отключился от Eureka")
+        except Exception as e:
+            print(f"Ошибка отключения от Eureka: {e}")
+
+app = FastAPI(
+    title="Report Generator",
+    description="Микросервис для генерации отчетов по тестированию",
+    lifespan=lifespan
 )
 
 backend = BackendClient()
+
+# --- Эндпоинты ---
 @app.get("/")
 async def root():
     return {"message": "Generator is alive", "status": "ok"}
+
 @app.get("/health")
 async def health():
     return {"status": "healthy"}
+
 @app.post("/generate_report")
 async def generate_report(request: ReportRequest):
-    test_data = await backend.get_test_run_data(request.run_id, request.jwt_token)
+    try:
+        print(f"Получен запрос: run_id={request.run_id}, template_type={request.template_type}")
+        test_data = await backend.get_test_run_data(request.run_id)
 
-    if request.template_type == "summary":
-        filepath = generate_summary_report(test_data)
-    elif request.template_type == "short":
-        filepath = generate_short_report(test_data)
-    elif request.template_type == "full":
-        filepath = generate_full_report(test_data)
-    elif request.template_type == "pdf":
-        filepath = generate_pdf_report(test_data)
-    else:
-        raise HTTPException(400, f"Неизвестный тип шаблона: {request.template_type}")
+        if request.template_type == "summary":
+            filepath = generate_summary_report(test_data)
+        elif request.template_type == "short":
+            filepath = generate_short_report(test_data)
+        elif request.template_type == "full":
+            filepath = generate_full_report(test_data)
+        else:
+            raise HTTPException(400, f"Неизвестный тип шаблона: {request.template_type}")
 
-    media_type = "application/pdf" if request.template_type == "pdf" else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        return FileResponse(
+            path=filepath,
+            filename=os.path.basename(filepath),
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        )
 
-    return FileResponse(
-        path=filepath,
-        filename=os.path.basename(filepath),
-        media_type=media_type
-    )
+    except Exception as e:
+        print(f"Ошибка: {e}")
+        raise HTTPException(500, detail=str(e))

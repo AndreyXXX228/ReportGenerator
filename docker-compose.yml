@@ -12,15 +12,29 @@ services:
       HOST: 0.0.0.0
       PORT: 8000
       RELOAD: "false"
+
+      # Eureka
+      USE_EUREKA: ${USE_EUREKA:-true}
+      BACKEND_SERVICE_NAME: ${BACKEND_SERVICE_NAME:-project-service}
+      EUREKA_SERVER_URL: ${EUREKA_SERVER_URL:-http://eureka:8761/eureka}
+
+      # Fallback URL
       BACKEND_URL: ${BACKEND_URL:-http://host.docker.internal:8080}
+
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
+    
+    networks:
+      - backend-network
+
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - ./app:/app/app
-      - ./run.py:/app/run.py
       - reports_data:/app/generated_reports
     restart: unless-stopped
+
+networks:
+  backend-network:
+    driver: bridge
 
 volumes:
   reports_data:

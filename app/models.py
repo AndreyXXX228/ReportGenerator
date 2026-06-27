@@ -9,6 +9,11 @@ class TestStatus(str, Enum):
     ERROR = "С ошибкой"
     SKIPPED = "Пропущен"
 
+class RawStatus(str, Enum):
+    NOT_STARTED = "NOT_STARTED"
+    SUCCESS = "SUCCESS"
+    ERROR = "ERROR"
+    SKIPPED = "SKIPPED"
 
 class TestCaseDetail(BaseModel):
     name: str
@@ -23,7 +28,6 @@ class DefectStep(BaseModel):
 
 
 class TestRunData(BaseModel):
-    # Основная информация (приходит с бэка)
     project_name: str
     project_description: str = ""
     version: str
@@ -33,7 +37,6 @@ class TestRunData(BaseModel):
     start_datetime: datetime = Field(default_factory=datetime.now)
     end_datetime: datetime = Field(default_factory=datetime.now)
 
-    # Единственный источник метрик — таблица тест-кейсов
     test_cases_table: List[TestCaseDetail] = []
 
     # Дефекты
@@ -103,4 +106,3 @@ class TestRunData(BaseModel):
 class ReportRequest(BaseModel):
     run_id: str
     template_type: str  # "summary", "short", "full"
-    jwt_token: str
